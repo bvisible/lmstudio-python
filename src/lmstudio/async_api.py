@@ -16,6 +16,7 @@ from typing import (
     Callable,
     Generic,
     Iterable,
+    Mapping,
     Sequence,
     Type,
     TypeAlias,
@@ -245,11 +246,12 @@ class _AsyncLMStudioWebsocket(LMStudioWebsocket[AsyncWebSocketSession]):
         ws_url: str,
         auth_details: DictObject,
         log_context: LogEventContext | None = None,
+        http_headers: dict[str, str] | None = None,
     ) -> None:
         """Initialize asynchronous websocket client."""
         super().__init__(ws_url, auth_details, log_context)
         self._ws_handler = AsyncWebsocketHandler(
-            task_manager, ws_url, auth_details, log_context
+            task_manager, ws_url, auth_details, log_context, http_headers
         )
 
     @property
@@ -384,12 +386,16 @@ class _AsyncSession(ClientSession["AsyncClient", _AsyncLMStudioWebsocket]):
             raise LMStudioClientError(
                 f"No API namespace defined for {type(self).__name__}"
             )
-        session_url = f"ws://{api_host}/{namespace}"
+        ws_protocol = ClientBase._get_ws_protocol(api_host)
+        session_url = f"{ws_protocol}://{api_host}/{namespace}"
         resources = self._resource_manager
         client = self._client
         self._lmsws = lmsws = await resources.enter_async_context(
             _AsyncLMStudioWebsocket(
-                client._task_manager, session_url, client._auth_details
+                client._task_manager,
+                session_url,
+                client._auth_details,
+                http_headers=client._http_headers,
             )
         )
         return lmsws
@@ -1493,10 +1499,14 @@ class AsyncClient(ClientBase):
     """Async SDK client interface."""
 
     def __init__(
-        self, api_host: str | None = None, api_token: str | None = None
+        self,
+        api_host: str | None = None,
+        api_token: str | None = None,
+        http_headers: Mapping[str, str] | None = None,
+        x_api_key: str | None = None,
     ) -> None:
         """Initialize API client."""
-        super().__init__(api_host, api_token)
+        super().__init__(api_host, api_token, http_headers, x_api_key)
         self._resources = AsyncExitStack()
         self._sessions: dict[str, _AsyncSession] = {}
         self._task_manager = AsyncTaskManager()
@@ -1543,17 +1553,17 @@ class AsyncClient(ClientBase):
         await self._resources.aclose()
 
     @staticmethod
-    async def _query_probe_url(url: str) -> httpx.Response:
+    async def _query_probe_url(url: str, headers: Mapping[str, str] | None = None) -> httpx.Response:
         async with httpx.AsyncClient() as client:
-            return await client.get(url, timeout=1)
+            return await client.get(url, headers=headers, timeout=1)
 
     @classmethod
     @sdk_public_api_async()
-    async def is_valid_api_host(cls, api_host: str) -> bool:
+    async def is_valid_api_host(cls, api_host: str, http_headers: Mapping[str, str] | None = None) -> bool:
         """Report whether the given API host is running an API server instance."""
         probe_url = cls._get_probe_url(api_host)
         try:
-            probe_response = await cls._query_probe_url(probe_url)
+            probe_response = await cls._query_probe_url(probe_url, headers=http_headers)
         except (httpx.ConnectTimeout, httpx.ConnectError):
             return False
         return cls._check_probe_response(probe_response)
@@ -1571,7 +1581,7 @@ class AsyncClient(ClientBase):
         specified_api_host = self._api_host
         if specified_api_host is None:
             api_host = await self.find_default_local_api_host()
-        elif await self.is_valid_api_host(specified_api_host):
+        elif await self.is_valid_api_host(specified_api_host, http_headers=self._http_headers):
             api_host = specified_api_host
         else:
             api_host = None

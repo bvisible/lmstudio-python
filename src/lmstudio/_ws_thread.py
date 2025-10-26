@@ -160,12 +160,14 @@ class SyncToAsyncWebsocketBridge:
         ws_url: str,
         auth_details: DictObject,
         log_context: LogEventContext,
+        http_headers: dict[str, str] | None = None,
     ) -> None:
         self._ws_handler = AsyncWebsocketHandler(
             ws_thread.task_manager,
             ws_url,
             auth_details,
             log_context,
+            http_headers,
         )
         self._logger = logger = new_logger(type(self).__name__)
         logger.update_context(log_context)

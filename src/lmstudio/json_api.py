@@ -201,6 +201,7 @@ DEFAULT_TTL = 60 * 60  # By default, leaves idle models loaded for an hour
 
 # lmstudio-js and lmstudio-python use the same API token environment variable
 _ENV_API_TOKEN = "LMSTUDIO_API_TOKEN"
+_ENV_X_API_KEY = "LMSTUDIO_X_API_KEY"
 _LMS_API_TOKEN_REGEX = re.compile(
     r"^sk-lm-(?P<clientIdentifier>[A-Za-z0-9]{8}):(?P<clientPasskey>[A-Za-z0-9]{20})$"
 )
@@ -2052,11 +2053,35 @@ class ClientBase:
     """Common base class for SDK client interfaces."""
 
     def __init__(
-        self, api_host: str | None = None, api_token: str | None = None
+        self,
+        api_host: str | None = None,
+        api_token: str | None = None,
+        http_headers: Mapping[str, str] | None = None,
+        x_api_key: str | None = None,
     ) -> None:
-        """Initialize API client."""
+        """Initialize API client.
+
+        Args:
+            api_host: LM Studio API host address (defaults to localhost:1234).
+            api_token: LM Studio API token for websocket authentication.
+            http_headers: Custom HTTP headers to send in the WebSocket handshake.
+            x_api_key: Convenience parameter to set X-API-Key header (for WAF bypass).
+        """
         self._api_host = api_host
         self._auth_details = self._create_auth_message(api_token)
+
+        # Process HTTP headers for WebSocket handshake
+        self._http_headers = dict(http_headers) if http_headers else {}
+
+        # Convenience shortcut for X-API-Key header
+        if x_api_key:
+            self._http_headers["X-API-Key"] = x_api_key
+
+        # Check environment variable if X-API-Key not provided
+        if "X-API-Key" not in self._http_headers:
+            env_key = os.environ.get(_ENV_X_API_KEY)
+            if env_key:
+                self._http_headers["X-API-Key"] = env_key
 
     @property
     def api_host(self) -> str:
@@ -2068,8 +2093,32 @@ class ClientBase:
     _DEFAULT_API_PORTS = _api_server_ports.default_api_ports
 
     @staticmethod
+    def _get_http_protocol(api_host: str) -> str:
+        """Determine HTTP protocol (http:// or https://) based on host."""
+        # Check if host has explicit protocol prefix
+        if api_host.startswith("https://"):
+            return "https"
+        if api_host.startswith("http://"):
+            return "http"
+
+        # Check for port 443 (standard HTTPS port)
+        if ":443" in api_host:
+            return "https"
+
+        # Default to http for local development
+        return "http"
+
+    @staticmethod
     def _get_probe_url(api_host: str) -> str:
-        return f"http://{api_host}/lmstudio-greeting"
+        http_protocol = ClientBase._get_http_protocol(api_host)
+        return f"{http_protocol}://{api_host}/lmstudio-greeting"
+
+    @staticmethod
+    def _get_ws_protocol(api_host: str) -> str:
+        """Determine WebSocket protocol (ws:// or wss://) based on host."""
+        # Use same logic as HTTP protocol, but for WebSocket
+        http_protocol = ClientBase._get_http_protocol(api_host)
+        return "wss" if http_protocol == "https" else "ws"
 
     @classmethod
     def _iter_default_api_hosts(cls) -> Iterable[str]:

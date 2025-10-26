@@ -19,6 +19,7 @@ from typing import (
     Iterator,
     Callable,
     Generic,
+    Mapping,
     Sequence,
     Type,
     TypeAlias,
@@ -303,10 +304,12 @@ class SyncLMStudioWebsocket(LMStudioWebsocket[SyncToAsyncWebsocketBridge]):
         ws_url: str,
         auth_details: DictObject,
         log_context: LogEventContext | None = None,
+        http_headers: dict[str, str] | None = None,
     ) -> None:
         """Initialize synchronous websocket client."""
         super().__init__(ws_url, auth_details, log_context)
         self._ws_thread = ws_thread
+        self._http_headers = http_headers
 
     @property
     def _httpx_ws(self) -> AsyncWebSocketSession | None:
@@ -334,6 +337,7 @@ class SyncLMStudioWebsocket(LMStudioWebsocket[SyncToAsyncWebsocketBridge]):
             self._ws_url,
             self._auth_details,
             self._logger.event_context,
+            self._http_headers,
         )
         if not ws.connect():
             if ws._connection_failure is not None:
@@ -458,11 +462,15 @@ class _SyncSession(ClientSession["Client", SyncLMStudioWebsocket]):
             raise LMStudioClientError(
                 f"No API namespace defined for {type(self).__name__}"
             )
-        session_url = f"ws://{api_host}/{namespace}"
+        ws_protocol = ClientBase._get_ws_protocol(api_host)
+        session_url = f"{ws_protocol}://{api_host}/{namespace}"
         resources = self._resources
         self._lmsws = lmsws = resources.enter_context(
             SyncLMStudioWebsocket(
-                self._client._ws_thread, session_url, self._client._auth_details
+                self._client._ws_thread,
+                session_url,
+                self._client._auth_details,
+                http_headers=self._client._http_headers,
             )
         )
         return lmsws
@@ -1541,10 +1549,14 @@ class Client(ClientBase):
     """Synchronous SDK client interface."""
 
     def __init__(
-        self, api_host: str | None = None, api_token: str | None = None
+        self,
+        api_host: str | None = None,
+        api_token: str | None = None,
+        http_headers: Mapping[str, str] | None = None,
+        x_api_key: str | None = None,
     ) -> None:
         """Initialize API client."""
-        super().__init__(api_host, api_token)
+        super().__init__(api_host, api_token, http_headers, x_api_key)
         self._resources = rm = ExitStack()
         self._ws_thread = ws_thread = AsyncWebsocketThread(dict(client=repr(self)))
         ws_thread.start()
@@ -1571,16 +1583,16 @@ class Client(ClientBase):
         self._resources.close()
 
     @staticmethod
-    def _query_probe_url(url: str) -> httpx.Response:
-        return httpx.get(url, timeout=1)
+    def _query_probe_url(url: str, headers: Mapping[str, str] | None = None) -> httpx.Response:
+        return httpx.get(url, headers=headers, timeout=1)
 
     @classmethod
     @sdk_public_api()
-    def is_valid_api_host(cls, api_host: str) -> bool:
+    def is_valid_api_host(cls, api_host: str, http_headers: Mapping[str, str] | None = None) -> bool:
         """Report whether the given API host is running an API server instance."""
         probe_url = cls._get_probe_url(api_host)
         try:
-            probe_response = cls._query_probe_url(probe_url)
+            probe_response = cls._query_probe_url(probe_url, headers=http_headers)
         except (httpx.ConnectTimeout, httpx.ConnectError):
             return False
         return cls._check_probe_response(probe_response)
@@ -1598,7 +1610,7 @@ class Client(ClientBase):
         specified_api_host = self._api_host
         if specified_api_host is None:
             api_host = self.find_default_local_api_host()
-        elif self.is_valid_api_host(specified_api_host):
+        elif self.is_valid_api_host(specified_api_host, http_headers=self._http_headers):
             api_host = specified_api_host
         else:
             api_host = None
@@ -1703,19 +1715,28 @@ class Client(ClientBase):
 # Convenience API
 _default_api_host: str | None = None
 _default_api_token: str | None = None
+_default_http_headers: Mapping[str, str] | None = None
+_default_x_api_key: str | None = None
 _default_client: Client | None = None
 
 
 @sdk_public_api()
-def configure_default_client(api_host: str, api_token: str | None = None) -> None:
+def configure_default_client(
+    api_host: str,
+    api_token: str | None = None,
+    http_headers: Mapping[str, str] | None = None,
+    x_api_key: str | None = None,
+) -> None:
     """Set the server API host for the default global client (without creating the client)."""
-    global _default_api_host
+    global _default_api_host, _default_api_token, _default_http_headers, _default_x_api_key
     if _default_client is not None:
         raise LMStudioClientError(
             "Default client is already created, cannot set its API host or token."
         )
     _default_api_host = api_host
     _default_api_token = api_token
+    _default_http_headers = http_headers
+    _default_x_api_key = x_api_key
 
 
 @sdk_public_api()
@@ -1727,7 +1748,12 @@ def get_default_client(api_host: str | None = None) -> Client:
         # This will raise an exception if the client already exists
         configure_default_client(api_host)
     if _default_client is None:
-        _default_client = Client(_default_api_host, _default_api_token)
+        _default_client = Client(
+            _default_api_host,
+            _default_api_token,
+            _default_http_headers,
+            _default_x_api_key,
+        )
         _default_client._ensure_api_host_is_valid()
     return _default_client
 
@@ -1735,9 +1761,9 @@ def get_default_client(api_host: str | None = None) -> Client:
 def _reset_default_client() -> None:
     # Allow the test suite to reset the client without
     # having to poke directly at the module's internals
-    global _default_api_host, _default_api_token, _default_client
+    global _default_api_host, _default_api_token, _default_http_headers, _default_x_api_key, _default_client
     previous_client = _default_client
-    _default_api_host = _default_api_token = _default_client = None
+    _default_api_host = _default_api_token = _default_http_headers = _default_x_api_key = _default_client = None
     if previous_client is not None:
         previous_client.close()
 

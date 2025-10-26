@@ -57,6 +57,101 @@ $ tox -m test -- -k test_download_model
 ```
 
 
+# Testing with Cloudflare WAF
+
+The SDK includes integration tests for LM Studio instances protected by Cloudflare WAF (Web Application Firewall). These tests verify that the SDK correctly sends HTTP headers (`X-API-Key`) in the WebSocket handshake to pass through firewall authentication.
+
+## Setup
+
+1. **Copy environment configuration template:**
+   ```console
+   $ cp .env.example .env
+   ```
+
+2. **Edit `.env` with your actual configuration:**
+   ```bash
+   LMSTUDIO_CLOUDFLARE_HOST=lmstudio.noraai.ch:443
+   LMSTUDIO_X_API_KEY=your-actual-api-key-here
+   ```
+
+   **Security Note:** Never commit `.env` file to git (it's in `.gitignore`)
+
+3. **Load environment variables before running tests:**
+   ```console
+   $ source .env                    # Linux/macOS
+   $ set -a; source .env; set +a    # Alternative for bash
+   ```
+
+## Running Cloudflare Tests
+
+Run Cloudflare integration tests only:
+```console
+$ tox -m test -- tests/test_cloudflare_integration.py -v
+```
+
+Run all tests including Cloudflare:
+```console
+$ tox -m test -- -v
+```
+
+Skip Cloudflare tests (default if env vars not set):
+```console
+$ tox -m test
+```
+
+## Quick Connection Test
+
+Verify connectivity to your Cloudflare-protected instance:
+
+```console
+$ source .env
+$ python -c "
+from lmstudio import Client
+client = Client('$LMSTUDIO_CLOUDFLARE_HOST', x_api_key='$LMSTUDIO_X_API_KEY')
+print(f'✅ Connected to {client.api_host}')
+client.close()
+"
+```
+
+## What the Tests Cover
+
+The Cloudflare integration tests verify:
+
+- ✅ Connection succeeds **with** `X-API-Key` header
+- ✅ Connection fails **without** `X-API-Key` (WAF blocks it)
+- ✅ `x_api_key` parameter works correctly
+- ✅ `http_headers` parameter works correctly
+- ✅ `LMSTUDIO_X_API_KEY` environment variable works
+- ✅ Both sync (`Client`) and async (`AsyncClient`) APIs work
+- ✅ Complete LLM predictions work through the WAF
+- ✅ Combined authentication (`api_token` + `x_api_key`) works
+
+## Understanding HTTP Headers vs WebSocket Auth
+
+The SDK supports **two independent layers** of authentication:
+
+1. **HTTP Header Auth (`x_api_key`)**: Checked by Cloudflare WAF **before** WebSocket connection
+   - Set via `x_api_key` parameter or `http_headers` dict
+   - Sent in HTTP handshake request
+   - Required to pass through WAF/firewall
+
+2. **WebSocket Auth (`api_token`)**: Checked by LM Studio **after** WebSocket is established
+   - Set via `api_token` parameter or `LMSTUDIO_API_TOKEN` env var
+   - Sent in WebSocket payload
+   - Required if LM Studio has authentication enabled
+
+You can use both together for double authentication:
+```python
+from lmstudio import Client
+
+client = Client(
+    "lmstudio.noraai.ch:443",
+    api_token="sk-lm-xxx",           # For LM Studio auth
+    x_api_key="your-cloudflare-key", # For WAF auth
+)
+```
+
+
 ## Adding new tests
 
 Test files should follow the following naming conventions:

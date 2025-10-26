@@ -282,6 +282,7 @@ class AsyncWebsocketHandler:
         ws_url: str,
         auth_details: DictObject,
         log_context: LogEventContext | None = None,
+        http_headers: dict[str, str] | None = None,
     ) -> None:
         self._auth_details = auth_details
         self._connection_attempted = asyncio.Event()
@@ -289,6 +290,7 @@ class AsyncWebsocketHandler:
         self._auth_failure: Any | None = None
         self._task_manager = task_manager
         self._ws_url = ws_url
+        self._http_headers = http_headers or {}
         self._ws: AsyncWebSocketSession | None = None
         self._ws_disconnected = asyncio.Event()
         self._rx_task: asyncio.Task[None] | None = None
@@ -346,7 +348,7 @@ class AsyncWebsocketHandler:
             # For reliable shutdown, handler must run entirely inside the task manager
             self._task_manager.ensure_running_in_task_manager()
             ws: AsyncWebSocketSession = await resources.enter_async_context(
-                aconnect_ws(self._ws_url)
+                aconnect_ws(self._ws_url, headers=self._http_headers)
             )
         except Exception as exc:
             self._connection_failure = exc

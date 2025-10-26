@@ -315,3 +315,54 @@ def test_websocket_cm_sync(ws_thread: AsyncWebsocketThread, caplog: LogCap) -> N
         # But the websocket is closed after the *first* CM exit
         assert not lmsws.connected
         assert httpx_ws.connection.state.value in WS_CLOSING_STATES
+
+# HTTP headers tests
+
+
+@pytest.mark.parametrize("client_cls", [AsyncClient, Client])
+def test_http_headers_stored(client_cls: type[ClientBase]) -> None:
+    """Test that HTTP headers are stored in the client."""
+    headers = {"X-Custom": "value1", "Authorization": "Bearer token"}
+    client = client_cls("localhost:1234", http_headers=headers)
+    assert client._http_headers == headers
+
+
+@pytest.mark.parametrize("client_cls", [AsyncClient, Client])
+def test_x_api_key_shortcut(client_cls: type[ClientBase]) -> None:
+    """Test that x_api_key parameter sets X-API-Key header."""
+    client = client_cls("localhost:1234", x_api_key="test-api-key")
+    assert client._http_headers.get("X-API-Key") == "test-api-key"
+
+
+@pytest.mark.parametrize("client_cls", [AsyncClient, Client])
+def test_x_api_key_from_env(client_cls: type[ClientBase]) -> None:
+    """Test that X-API-Key is read from environment variable."""
+    with mock.patch.dict(os.environ, {"LMSTUDIO_X_API_KEY": "env-api-key"}):
+        client = client_cls("localhost:1234")
+        assert client._http_headers.get("X-API-Key") == "env-api-key"
+
+
+@pytest.mark.parametrize("client_cls", [AsyncClient, Client])
+def test_x_api_key_parameter_overrides_env(client_cls: type[ClientBase]) -> None:
+    """Test that x_api_key parameter overrides environment variable."""
+    with mock.patch.dict(os.environ, {"LMSTUDIO_X_API_KEY": "env-api-key"}):
+        client = client_cls("localhost:1234", x_api_key="param-api-key")
+        assert client._http_headers.get("X-API-Key") == "param-api-key"
+
+
+@pytest.mark.parametrize("client_cls", [AsyncClient, Client])
+def test_http_headers_combined_with_x_api_key(client_cls: type[ClientBase]) -> None:
+    """Test that http_headers and x_api_key are combined correctly."""
+    headers = {"X-Custom": "value1"}
+    client = client_cls("localhost:1234", http_headers=headers, x_api_key="api-key")
+    assert client._http_headers.get("X-Custom") == "value1"
+    assert client._http_headers.get("X-API-Key") == "api-key"
+
+
+@pytest.mark.parametrize("client_cls", [AsyncClient, Client])
+def test_http_headers_default_empty(client_cls: type[ClientBase]) -> None:
+    """Test that http_headers defaults to empty dict when no env var set."""
+    with mock.patch.dict(os.environ) as env:
+        env.pop("LMSTUDIO_X_API_KEY", None)
+        client = client_cls("localhost:1234")
+        assert client._http_headers == {}

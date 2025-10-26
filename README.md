@@ -58,6 +58,31 @@ for message in EXAMPLE_MESSAGES:
 Additional SDK examples and usage recommendations may be found in the main
 [LM Studio Python SDK documentation](https://lmstudio.ai/docs/python).
 
+### Connecting to Cloudflare WAF Protected Instances
+
+When connecting to an LM Studio instance protected by Cloudflare WAF (Web Application Firewall), you need to provide an `X-API-Key` header that will be sent during the HTTP handshake before the WebSocket connection is established:
+
+```python
+import lmstudio as lms
+
+# Using x_api_key parameter
+client = lms.Client("lmstudio.example.com:443", x_api_key="your-api-key")
+
+# Or using http_headers for custom headers
+client = lms.Client(
+    "lmstudio.example.com:443",
+    http_headers={"X-API-Key": "your-api-key"}
+)
+
+# Or using environment variable
+# export LMSTUDIO_X_API_KEY=your-api-key
+client = lms.Client("lmstudio.example.com:443")
+```
+
+The SDK automatically detects when to use secure protocols (`wss://` and `https://`) based on the port (443) or explicit protocol prefix in the host address.
+
+For more details about Cloudflare WAF integration and testing, see the [testing documentation](tests/README.md#testing-with-cloudflare-waf).
+
 ## SDK versioning
 
 The LM Studio Python SDK uses a 3-part `X.Y.Z` numeric version identifier:
